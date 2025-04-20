@@ -12,6 +12,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
   rails:
+    user: root   # ← 追加（あとで rails ユーザーに戻してもOK）
     environment:
       - RAILS_ENV=development
     build:

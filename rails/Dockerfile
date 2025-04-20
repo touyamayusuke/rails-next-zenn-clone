@@ -1,23 +1,21 @@
 # syntax = docker/dockerfile:1
 
-# Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile
 ARG RUBY_VERSION=3.1.2
 FROM registry.docker.com/library/ruby:$RUBY_VERSION-slim as base
 
-# Rails app lives here
+# アプリの作業ディレクトリ
 WORKDIR /rails
 
-# Set production environment
-ENV RAILS_ENV="production" \
-    BUNDLE_DEPLOYMENT="1" \
+# 環境変数（開発用）
+ENV RAILS_ENV="development" \
+    BUNDLE_DEPLOYMENT="0" \
     BUNDLE_PATH="/usr/local/bundle" \
-    BUNDLE_WITHOUT="development"
+    BUNDLE_WITHOUT=""
 
-
-# Throw-away build stage to reduce size of final image
+# ----------------------------------------
+# ビルド用ステージ（gemのインストールなど）
 FROM base as build
 
-# Install packages needed to build gems
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
       build-essential \
@@ -27,8 +25,8 @@ RUN apt-get update -qq && \
       git \
       libvips \
       pkg-config
-      
-# Install application gems
+
+# Gemfile, Gemfile.lock をコピーして bundle install
 COPY Gemfile Gemfile.lock ./
 
 RUN gem update --system -N && \
@@ -38,33 +36,36 @@ RUN bundle install && \
     rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
     bundle exec bootsnap precompile --gemfile
 
-# Copy application code
+# アプリのコードをコピー
 COPY . .
 
-# Precompile bootsnap code for faster boot times
+# bootsnap の precompile（起動高速化）
 RUN bundle exec bootsnap precompile app/ lib/
 
-
-# Final stage for app image
+# ----------------------------------------
+# 実行用ステージ（開発用設定）
 FROM base
 
-# Install packages needed for deployment
+# ⚠️ `build-essential` をここにも含める（←これがないと byebug がビルドできない）
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl default-mysql-client libvips && \
+    apt-get install --no-install-recommends -y \
+      curl \
+      default-mysql-client \
+      libvips \
+      build-essential && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-# Copy built artifacts: gems, application
+# build ステージから成果物をコピー
 COPY --from=build /usr/local/bundle /usr/local/bundle
 COPY --from=build /rails /rails
 
-# Run and own only the runtime files as a non-root user for security
+# 非rootユーザーの作成と権限付与
 RUN useradd rails --create-home --shell /bin/bash && \
     chown -R rails:rails db log storage tmp
 USER rails:rails
 
-# Entrypoint prepares the database.
-ENTRYPOINT ["/rails/bin/docker-entrypoint"]
-
-# Start the server by default, this can be overwritten at runtime
+# ポート開放
 EXPOSE 3000
-CMD ["./bin/rails", "server"]
+
+# ログを監視してコンテナを常駐させる（開発向け）
+CMD ["bash", "-c", "tail -f log/development.log"]
